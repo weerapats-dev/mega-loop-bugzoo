@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import date
 
 from opentelemetry import trace
 
@@ -353,3 +354,140 @@ def no_tool_evidence(tracer: trace.Tracer) -> None:
             llm_attrs(user=question, output=tools.answer_from_memory(question)),
         ):
             pass
+
+
+# ── chains: related defects, for multi-bug groups ───────────────────────────
+#
+# The scenarios above are one defect per trace, which is what keeps coverage checkable
+# and what makes every bug a group of one. A chain is the opposite: several defects in
+# one trace, in a relationship the analyst can confirm three ways — span nesting or order,
+# co-failure counts, and a call in ``tools.py``. The relation judge discounts a pair that
+# co-failed fewer than five times, so each chain emits its co-failing case six times, plus
+# cases where a downstream defect fires ALONE, which is what separates a bug of its own
+# from a symptom that should merge into its cause.
+
+CHAINS: dict[str, Callable[[trace.Tracer], int]] = {}
+
+TODAY = date(2026, 9, 15)
+CO_FAIL_TRACES = 6
+SOLO_TRACES = 2
+
+
+def chain(name: str) -> Callable[[Callable], Callable]:
+    def register(fn: Callable) -> Callable:
+        CHAINS[name] = fn
+        return fn
+
+    return register
+
+
+def _refund_trace(tracer: trace.Tracer, order: dict) -> None:
+    question = f"can I still get a refund on an order placed {order['placed']}?"
+    answer = tools.answer_refund_question(order, TODAY)
+    with span(tracer, "answer_refund_question", _agent(question, answer)):
+        usage_input = {"order": order, "today": TODAY.isoformat()}
+        usage = tools.refund_window_usage(order, TODAY)
+        with span(
+            tracer, "refund_window_usage", tool_attrs("refund_window_usage", usage_input, usage)
+        ):
+            with span(
+                tracer,
+                "parse_order_date",
+                tool_attrs("parse_order_date", order["placed"], ""),
+            ) as sp:
+                try:
+                    parsed = tools.parse_order_date(order["placed"])
+                    sp.set_attribute("output.value", parsed.isoformat())
+                except ValueError as exc:
+                    fail(sp, f"ValueError: {exc}")
+
+
+@chain("sequential_refund")
+def sequential_refund(tracer: trace.Tracer) -> int:
+    """parse_order_date → refund_window_usage → answer_refund_question, nested.
+
+    Expected group: Sequential, three bugs. Solo cases: a missing window (usage fails
+    with the date intact) and a future-dated order (only the answer fails).
+    """
+    cases = [
+        ({"placed": "03/09/2026", "window_days": 30}, CO_FAIL_TRACES),
+        ({"placed": "2026-09-01"}, SOLO_TRACES),
+        ({"placed": "2026-09-20", "window_days": 30}, SOLO_TRACES),
+    ]
+    for order, times in cases:
+        for _ in range(times):
+            _refund_trace(tracer, order)
+    return sum(times for _, times in cases)
+
+
+def _quote_trace(tracer: trace.Tracer, region: str, currency: str) -> None:
+    amount = 100.0
+    question = f"how much is a 100 USD order shipped to {region}, in {currency}?"
+    answer = tools.quote_international_order(region, currency, amount)
+    with span(tracer, "quote_international_order", _agent(question, answer)):
+        profile = None
+        with span(tracer, "load_tax_profile", tool_attrs("load_tax_profile", region, "")) as sp:
+            try:
+                profile = tools.load_tax_profile(region)
+                sp.set_attribute("output.value", json.dumps(profile))
+            except KeyError as exc:
+                fail(sp, f"KeyError: {exc}")
+        vat_line = tools.format_vat_line(profile)
+        with span(
+            tracer, "format_vat_line", tool_attrs("format_vat_line", profile, vat_line)
+        ):
+            pass
+        convert_input = {"amount_usd": amount, "profile": profile, "currency": currency}
+        with span(
+            tracer, "convert_to_local", tool_attrs("convert_to_local", convert_input, "")
+        ) as sp:
+            try:
+                sp.set_attribute(
+                    "output.value", str(tools.convert_to_local(amount, profile, currency))
+                )
+            except (KeyError, TypeError) as exc:
+                fail(sp, f"{type(exc).__name__}: {exc}")
+
+
+@chain("parallel_quote")
+def parallel_quote(tracer: trace.Tracer) -> int:
+    """load_tax_profile feeds two siblings that break independently of each other.
+
+    Expected group: Parallel, three bugs — format_vat_line and convert_to_local both
+    depend on load_tax_profile, neither on the other. Solo cases: a region whose rate is
+    unset (only the VAT line fails) and an unsupported currency (only conversion fails).
+    """
+    cases = [
+        (("BR", "GBP"), CO_FAIL_TRACES),
+        (("HK", "GBP"), SOLO_TRACES),
+        (("US", "EUR"), SOLO_TRACES),
+    ]
+    for (region, currency), times in cases:
+        for _ in range(times):
+            _quote_trace(tracer, region, currency)
+    return sum(times for _, times in cases)
+
+
+def _tracking_trace(tracer: trace.Tracer, tracking_id: str) -> None:
+    question = f"where is my parcel {tracking_id}?"
+    answer = tools.answer_tracking_question(tracking_id)
+    with span(tracer, "answer_tracking_question", _agent(question, answer)):
+        with span(tracer, "track_shipment", tool_attrs("track_shipment", tracking_id, "")) as sp:
+            try:
+                sp.set_attribute("output.value", tools.track_shipment(tracking_id))
+            except IndexError as exc:
+                fail(sp, f"IndexError: {exc}")
+
+
+@chain("conflict_tracking")
+def conflict_tracking(tracer: trace.Tracer) -> int:
+    """Two unrelated defects in track_shipment, never in the same trace.
+
+    Expected group: Conflict, two bugs — the fixes edit one function, which groups them
+    by fingerprint without any dependency between them.
+    """
+    cases = [("1Z999", 3), ("XX1234567890", 3)]
+    for tracking_id, times in cases:
+        for _ in range(times):
+            _tracking_trace(tracer, tracking_id)
+    return sum(times for _, times in cases)

@@ -14,7 +14,7 @@ import argparse
 import sys
 import time
 
-from bugzoo.scenarios import SCENARIOS, emit_baseline
+from bugzoo.scenarios import CHAINS, SCENARIOS, emit_baseline
 from bugzoo.telemetry import Config, build_tracer
 
 # Three detectors read a line measured from the project's own history rather than a
@@ -39,12 +39,26 @@ def main(argv: list[str] | None = None) -> int:
         metavar="SCENARIO",
         help="emit just this scenario (repeatable). Default: all of them.",
     )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="emit each chosen scenario this many times (default 1). The analyst never sees "
+        "an issue with fewer than 2 failing traces, so use 2+ when the run should file bugs.",
+    )
+    parser.add_argument(
+        "--chains",
+        action="store_true",
+        help="also emit the chains — related defects that file as multi-bug groups",
+    )
     parser.add_argument("--list", action="store_true", help="list scenario names and exit")
     args = parser.parse_args(argv)
 
     if args.list:
         for name in sorted(SCENARIOS):
             print(name)
+        for name in sorted(CHAINS):
+            print(f"{name} (chain)")
         return 0
 
     chosen = args.only or sorted(SCENARIOS)
@@ -63,16 +77,23 @@ def main(argv: list[str] | None = None) -> int:
         if (i + 1) % 10 == 0:
             print(f"  baseline {i + 1}/{args.baseline}")
     for name in chosen:
-        SCENARIOS[name](tracer)
-        print(f"  {name}")
+        for _ in range(args.repeat):
+            SCENARIOS[name](tracer)
+        print(f"  {name} ×{args.repeat}")
+    chain_traces = 0
+    if args.chains:
+        for name in sorted(CHAINS):
+            emitted = CHAINS[name](tracer)
+            chain_traces += emitted
+            print(f"  {name} (chain, {emitted} traces)")
 
     # Flush before the process exits or the batch processor drops what it is holding —
     # a silent partial seed looks exactly like a detector that failed to fire.
     provider.force_flush()
     provider.shutdown()
     print(
-        f"\n✓ {args.baseline} baseline + {len(chosen)} anomaly traces "
-        f"in {time.monotonic() - started:.1f}s"
+        f"\n✓ {args.baseline} baseline + {len(chosen) * args.repeat} anomaly"
+        f" + {chain_traces} chain traces in {time.monotonic() - started:.1f}s"
     )
     print("  Langfuse ingests asynchronously — give it a few seconds before querying.")
     return 0

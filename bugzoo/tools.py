@@ -12,6 +12,7 @@ counterfactual re-runs the owning tool with that input and checks the error clea
 from __future__ import annotations
 
 import json
+from datetime import date
 import time
 
 DOCS = [
@@ -218,3 +219,118 @@ def answer_from_memory(question: str) -> str:
             "days, and orders above fifty dollars ship free within the contiguous states."
         )
     return ""
+
+
+# ── chains: defects that fail together ──────────────────────────────────────
+#
+# Everything above fails alone, on purpose. These fail in a known relationship, so the
+# analyst has a dependency to find and the bug graph has a multi-bug group to draw. Each
+# defect is still its own function with its own fix; what links them is a call.
+
+
+def parse_order_date(text: str) -> date:
+    """Order placement date.
+
+    Assumes ISO ``YYYY-MM-DD``; the storefront writes ``MM/DD/YYYY``, so every order
+    placed through it raises instead of parsing.
+    """
+    year, month, day = text.split("-")
+    return date(int(year), int(month), int(day))
+
+
+def refund_window_usage(order: dict, today: date) -> str:
+    """How much of the refund window has elapsed, as a percentage.
+
+    Swallows an unreadable date and a missing window alike, then formats the number it
+    never computed — the caller receives ``"None%"`` rather than an error.
+    """
+    try:
+        elapsed = (today - parse_order_date(order["placed"])).days
+        used = round(elapsed / order["window_days"] * 100)
+    except (ValueError, KeyError):
+        used = None
+    return f"{used}%"
+
+
+def answer_refund_question(order: dict, today: date) -> str:
+    """Tell the customer whether a refund is still possible.
+
+    Answers only when the usage reads as a plain number, so anything else — including a
+    negative usage from an order dated in the future — ends the turn with no reply at all.
+    """
+    usage = refund_window_usage(order, today)
+    if not usage.rstrip("%").isdigit():
+        return ""
+    return f"You have used {usage} of your refund window."
+
+
+TAX_PROFILES = {"US": {"vat": 0}, "UK": {"vat": 20}, "HK": {"vat": None}}
+FX_RATES = {"USD": 1.0, "GBP": 0.79}
+
+
+def load_tax_profile(region: str) -> dict:
+    """Tax profile for REGION.
+
+    Indexes the table directly, so a region the storefront sells to before the tax table
+    lists it raises instead of falling back to a default profile.
+    """
+    return TAX_PROFILES[region]
+
+
+def format_vat_line(profile: dict | None) -> str:
+    """The VAT line on a quote.
+
+    Formats the rate whether or not there is one, so a missing profile or rate reaches the
+    customer as ``"VAT None%"``.
+    """
+    rate = profile.get("vat") if profile else None
+    return f"VAT {rate}%"
+
+
+def convert_to_local(amount_usd: float, profile: dict | None, currency: str) -> float:
+    """The quote in the customer's currency, VAT included.
+
+    Reads the profile without checking it exists and the rate table without a fallback,
+    so either gap raises.
+    """
+    vat = profile["vat"] or 0
+    return round(amount_usd * FX_RATES[currency] * (1 + vat / 100), 2)
+
+
+def quote_international_order(region: str, currency: str, amount_usd: float) -> str:
+    """Quote an order for a region and currency."""
+    try:
+        profile = load_tax_profile(region)
+    except KeyError:
+        profile = None
+    vat_line = format_vat_line(profile)
+    try:
+        total = convert_to_local(amount_usd, profile, currency)
+    except (KeyError, TypeError):
+        return f"We could not price this order yet. {vat_line}"
+    return f"Total {total} {currency}. {vat_line}"
+
+
+CARRIER_PREFIXES = {"1Z": "UPS", "94": "USPS"}
+DELIVERY_PROGRESS = {"UPS": 60, "USPS": 35}
+
+
+def track_shipment(tracking_id: str) -> str:
+    """Delivery progress for TRACKING_ID.
+
+    Two unrelated defects in one function: the check digit is read at a fixed index, so a
+    short legacy id raises; and a carrier with no progress feed is formatted anyway, so the
+    customer reads ``"None% delivered"``.
+    """
+    check_digit = tracking_id[11]
+    carrier = CARRIER_PREFIXES.get(tracking_id[:2], "unknown carrier")
+    progress = DELIVERY_PROGRESS.get(carrier)
+    return f"{carrier} shipment {progress}% delivered (check {check_digit})"
+
+
+def answer_tracking_question(tracking_id: str) -> str:
+    """Tell the customer where their parcel is."""
+    try:
+        return track_shipment(tracking_id)
+    except IndexError:
+        return "We could not find that tracking number."
