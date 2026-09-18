@@ -206,15 +206,3 @@ def build_system_prompt(budget_chars: int) -> str:
     return "\n".join(kept)
 
 
-def answer_from_memory(question: str) -> str:
-    """Answer without retrieval when the question 'looks familiar'.
-
-    Familiarity is a substring test against a keyword list, so ordinary questions match
-    and the agent answers confidently having gathered no evidence at all.
-    """
-    if any(word in question for word in ("refund", "shipping", "warranty")):
-        return (
-            "Refunds are returned to the original payment method within five business "
-            "days, and orders above fifty dollars ship free within the contiguous states."
-        )
-    return ""
