@@ -52,13 +52,16 @@ FULL_SYSTEM_PROMPT = "\n".join(
 )
 
 
-def parse_price(text: str) -> float:
+def parse_price(text: str) -> float | None:
     """``"Price: 12.50 USD"`` -> ``12.5``.
 
-    Assumes the price is always the second whitespace-separated token, so any listing
-    that words its price ("free", "call for pricing") raises instead of returning None.
+    Assumes the price is the second whitespace-separated token; returns None for any listing
+    that words its price ("free", "call for pricing") or cannot be parsed as a float.
     """
-    return float(text.split()[1])
+    try:
+        return float(text.split()[1])
+    except (ValueError, IndexError):
+        return None
 
 
 def plan_next_step(query: str) -> str:
