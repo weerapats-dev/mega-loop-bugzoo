@@ -12,6 +12,7 @@ counterfactual re-runs the owning tool with that input and checks the error clea
 from __future__ import annotations
 
 import json
+import os
 from datetime import date
 import time
 
@@ -334,3 +335,19 @@ def answer_tracking_question(tracking_id: str) -> str:
         return track_shipment(tracking_id)
     except IndexError:
         return "We could not find that tracking number."
+
+
+def generate_reply(system: str, user: str) -> str:
+    """The agent's model turn, through the OpenAI SDK.
+
+    The scenarios record this span without calling it, so emitting traces needs no key; only a
+    live re-run (auto-fix verification) does.
+    """
+    from openai import OpenAI
+
+    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    reply = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+    )
+    return reply.choices[0].message.content or ""
