@@ -75,7 +75,7 @@ def run_agent_loop(query: str, max_steps: int = 10) -> str:
     """
     for _ in range(max_steps):
         if plan_next_step(query) == "done":
-            return "done"
+            return generate_reply(FULL_SYSTEM_PROMPT, query)
     raise RuntimeError(f"max iterations ({max_steps}) exceeded without an answer")
 
 
