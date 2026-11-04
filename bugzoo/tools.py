@@ -167,7 +167,7 @@ def format_completion_rate(done: int, total: int) -> str:
     Guards the division but not the rendering, so an empty period interpolates the
     sentinel straight into text a user reads.
     """
-    rate = round(done / total * 100, 1) if total else None
+    rate = round(done / total * 100, 1) if total else 0.0
     return f"{rate}%"
 
 
