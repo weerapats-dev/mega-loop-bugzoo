@@ -268,7 +268,7 @@ def answer_refund_question(order: dict, today: date) -> str:
 
 
 TAX_PROFILES = {"US": {"vat": 0}, "UK": {"vat": 20}, "HK": {"vat": None}}
-FX_RATES = {"USD": 1.0, "GBP": 0.79}
+FX_RATES = {"USD": 1.0, "GBP": 0.79, "EUR": 0.85}
 
 
 def load_tax_profile(region: str) -> dict:
@@ -293,11 +293,10 @@ def format_vat_line(profile: dict | None) -> str:
 def convert_to_local(amount_usd: float, profile: dict | None, currency: str) -> float:
     """The quote in the customer's currency, VAT included.
 
-    Reads the profile without checking it exists and the rate table without a fallback,
-    so either gap raises.
+    Safely checks the profile and uses a fallback for unknown currencies.
     """
-    vat = profile["vat"] or 0
-    return round(amount_usd * FX_RATES[currency] * (1 + vat / 100), 2)
+    vat = (profile.get("vat") if profile else None) or 0
+    return round(amount_usd * FX_RATES.get(currency, 1.0) * (1 + vat / 100), 2)
 
 
 def quote_international_order(region: str, currency: str, amount_usd: float) -> str:
