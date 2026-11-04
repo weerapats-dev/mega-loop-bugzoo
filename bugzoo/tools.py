@@ -267,7 +267,7 @@ def answer_refund_question(order: dict, today: date) -> str:
     return f"You have used {usage} of your refund window."
 
 
-TAX_PROFILES = {"US": {"vat": 0}, "UK": {"vat": 20}, "HK": {"vat": None}}
+TAX_PROFILES = {"US": {"vat": 0}, "UK": {"vat": 20}, "HK": {"vat": None}, "BR": {"vat": 0}}
 FX_RATES = {"USD": 1.0, "GBP": 0.79, "EUR": 0.85}
 
 
